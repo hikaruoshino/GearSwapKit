@@ -3,7 +3,7 @@
 FF11 の GearSwap を、**自分で Lua を書かずに始める**ための、日本語のキットです。
 ゲームで「この装備を着たとき」の装備を書き出して (`//gs export`)、キットで「どの場面の装備にするか」を選ぶと、GearSwap のジョブ用の Lua ファイルができます。
 
-> English summary: a small Japanese-language tool that turns the gear files written by `//gs export` into a ready-to-use GearSwap job Lua (Mote-Include based). No optimization, no game automation. See the notes below; the screen and help texts are in Japanese.
+> English summary: a small tool that turns the gear files written by `//gs export` into a ready-to-use GearSwap job Lua (Mote-Include based). No optimization, no game automation. The interface is available in English or Japanese; this repository is the Japanese edition, and the English one lives at [GearSwapKit-EN](https://github.com/hikaruoshino/GearSwapKit-EN).
 
 ---
 
@@ -229,3 +229,5 @@ MIT ライセンスです (`LICENSE` を参照)。
 ## 不具合・動作報告
 
 不具合や、ほかのジョブでの動作の報告は、GitHub の Issues か、ブログのコメントへお願いします。
+
+例えば「シーフのこういう場面の装備セットが欲しい」などがあれば、こちらで追加しますので、その際は Issues かブログのコメントに書き込んでください。
