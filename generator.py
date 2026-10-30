@@ -629,14 +629,30 @@ PET_MAPS = {
 PET_TYPES = {"SMN": ("BloodPactRage", "BloodPactWard"), "BST": ("Monster",)}
 
 
-def _pet_moves():
-    import json
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pet_moves.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
+# 読めなかったデータの JSON の名前。画面が Lua を作ったあとに見て、警告を出す (黙ってセットの対応が消えないように)
+MISSING_DATA = set()
+_DATA_CACHE = {}
+
+
+def _load_data(name, key=None):
+    """キットと同じ場所の JSON を 1 度だけ読む。読めなければ MISSING_DATA に名前を残して {} を返す。"""
+    if name not in _DATA_CACHE:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            data = data[key] if key else data
+            _DATA_CACHE[name] = data if isinstance(data, dict) else None   # 形が違うものも、読めなかったものとして扱う
+        except (OSError, ValueError, KeyError, TypeError):
+            _DATA_CACHE[name] = None
+    if _DATA_CACHE[name] is None:
+        MISSING_DATA.add(name)
         return {}
+    return _DATA_CACHE[name]
+
+
+def _pet_moves():
+    return _load_data("pet_moves.json")
 
 
 def pet_map_rows(job, emitted):
@@ -665,9 +681,7 @@ def blu_map_rows(job, emitted):
     have = {c for c in BLU_SETS if "sets.midcast.%s" % c in emitted}
     if not have and "sets.midcast.BlueMagicAcc" not in emitted:
         return {}
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blu_spells.json")
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)["spells"]
+    data = _load_data("blu_spells.json", "spells")
     if "sets.midcast.BlueMagicAcc" in emitted:
         have.add("BlueMagicAcc")
         data = dict(data, **{n: "BlueMagicAcc" for n in BLU_ACC_SPELLS})

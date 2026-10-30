@@ -7,6 +7,8 @@ import datetime
 import json
 import os
 import shutil
+import tempfile
+import time
 
 import choices as CH
 import export_parser as EP
@@ -32,6 +34,29 @@ MERIT_HELP_EN = ("Gear that enhances a merit trait (Optimization, Fine-Tuning, e
                  "layered over your idle and engaged sets (for PUP and DRG, only while your pet is out).")
 # 一覧に無い、まとめのセット (ability_gear.json の set_path) の英語の表示名
 SPECIAL_SET_TITLES_EN = {"sets.Stormsurge": "Stormsurge feet (when casting storm spells)"}
+
+
+def atomic_write(path, text, newline=None):
+    """同じフォルダーの一時ファイルに書いてから置き換える。書き込みの途中で落ちても、今のファイルは空にならない。"""
+    d = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".gsk_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as f:
+            f.write(text)
+        for i in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if i == 4:
+                    raise
+                time.sleep(0.1)  # ウイルス対策・同期のソフトが、ほんの少しのあいだ置き換え先をつかんでいることがある
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _key_name(path):
@@ -467,15 +492,16 @@ class Project:
                            pup_auto=self._cur().pup_auto, auto_waist=self._cur().auto_waist)
 
     def write_lua(self, data_dir):
-        """data_dir/<ジョブ>.lua に書く。既にあれば、同じ場所にバックアップを取ってから。(path, backup または None) を返す。"""
+        """data_dir/<ジョブ>.lua に書く。既にあれば、同じ場所にバックアップを取ってから。(path, backup または None) を返す。
+        Lua は先に全部作ってから書く (作る途中で失敗しても、今のファイルを空にしない)。"""
+        text = self.to_lua()
         path = os.path.join(data_dir, "%s.lua" % self.job)
         backup = None
         if os.path.exists(path):
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             backup = os.path.join(data_dir, "%s.lua.%s.bak" % (self.job, stamp))
             shutil.copy2(path, backup)
-        with open(path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(self.to_lua())
+        atomic_write(path, text, newline="\n")
         return path, backup
 
     # --- 保存 / 読み込み (作業のやり直し用・全ジョブぶん) ---
