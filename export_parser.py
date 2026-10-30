@@ -28,6 +28,11 @@ SLOT_JA = {
 }
 
 _KEY = re.compile(r'([A-Za-z_][A-Za-z_0-9]*)\s*=\s*')
+# 表 { … } の中で、改行のあとにスロット名= が出てくる = 閉じ括弧を忘れて、次の行の装備まで読んだ
+_SLOT_NAMES = '|'.join(sorted(SLOTS + list(SLOT_ALIASES), key=len, reverse=True))
+_SLOT_IN_TABLE = re.compile(r'\n\s*(?:%s)\s*=' % _SLOT_NAMES)
+_ITEM_TABLE = re.compile(r'\{\s*name\s*=')      # 装備 1 つの表 { name="…", augments={…} }
+_NO_EQUALS = re.compile(r'(?:^|[{,])[ \t]*(%s)[ \t]*["\'{]' % _SLOT_NAMES, re.M)
 
 
 class Item:
@@ -61,6 +66,8 @@ def _read_string(text, i):
             continue
         if c == quote:
             return ''.join(out), j + 1
+        if c == '\n':
+            break                       # Lua の "…" は行をまたげない (閉じ忘れ)
         out.append(c)
         j += 1
     raise ValueError('文字列が閉じていません')
@@ -107,8 +114,8 @@ def strip_comments(text):
             try:
                 _value, j = _read_string(text, i)
             except ValueError:
-                out.append(text[i:])
-                break
+                j = text.find('\n', i)          # 閉じていない引用符: その行の終わりまでをそのまま残して続ける
+                j = n if j < 0 else j
             out.append(text[i:j])
             i = j
             continue
@@ -117,7 +124,9 @@ def strip_comments(text):
             if m:
                 close = ']' + m.group(1) + ']'
                 end = text.find(close, i + m.end())
-                i = n if end < 0 else end + len(close)
+                stop = n if end < 0 else end + len(close)
+                out.append('\n' * text.count('\n', i, stop))   # 行番号がずれないよう、改行は残す
+                i = stop
             else:
                 end = text.find('\n', i)
                 i = n if end < 0 else end      # 改行は残す
@@ -127,11 +136,12 @@ def strip_comments(text):
     return ''.join(out)
 
 
-def parse_entries(text):
-    """ファイル内の「スロット=装備」を、出てきた順に全部返す ([Item, …])。item= の行 (アイテム) は除く。
-    コメント (--) の中の装備は読まない。"""
+def _scan(text):
+    """(読めた装備 [Item, …], 読めなかったところ [コメントを除いた文字列での位置, …], コメントを除いた文字列) を返す。
+    読めなかったところ = スロット名なのに値が "…" / { … } でない (ear1== など)・引用符や { } が閉じていない・
+    スロットでない名前に装備の名前らしい文字列がある (lefft_ear="…" など)。"""
     text = strip_comments(text)
-    items = []
+    items, unread = [], []
     i = 0
     while True:
         m = _KEY.search(text, i)
@@ -140,27 +150,81 @@ def parse_entries(text):
         key = SLOT_ALIASES.get(m.group(1), m.group(1))
         j = m.end()
         if j >= len(text):
+            if key in SLOTS:
+                unread.append(m.start())
             break
         if key not in SLOTS:
-            # スロット以外 (sets.exported = { の外側など) は、中身を読み続ける
+            # スロット以外 (sets.exported = { の外側など) は、中身を読み続ける。
+            # ただし装備の形の値 ("…" や { name=… }) が付いていれば、スロット名の打ち間違い (lefft_ear など)
+            if key not in ('item', 'name') and (text[j] in ('"', "'") or _ITEM_TABLE.match(text, j)):
+                unread.append(m.start())
+                if text[j] == '{':
+                    try:
+                        _raw, i = _read_table(text, j)
+                        continue
+                    except ValueError:
+                        pass
             i = j
             continue
-        if text[j] in ('"', "'"):
-            value, nxt = _read_string(text, j)
-            raw = '"%s"' % value.replace('\\', '\\\\').replace('"', '\\"')
-            name = value
-        elif text[j] == '{':
-            raw, nxt = _read_table(text, j)
-            name = _table_name(raw)
-        else:
-            i = j
+        try:
+            if text[j] in ('"', "'"):
+                value, nxt = _read_string(text, j)
+                raw = '"%s"' % value.replace('\\', '\\\\').replace('"', '\\"')
+                name = value
+            elif text[j] == '{':
+                raw, nxt = _read_table(text, j)
+                if _SLOT_IN_TABLE.search(raw):
+                    raise ValueError('{ } が閉じていません')   # 閉じ忘れで、次の行のスロットまで飲み込んだ
+                name = _table_name(raw)
+            elif re.match(r'empty\b', text[j:j + 6]):
+                i = j + 5            # sub=empty (GearSwap の「何も着けない」) は、装備として扱わない
+                continue
+            else:
+                unread.append(m.start())     # 変数 (gear.X など) や書き間違い (ear1== など)
+                i = j
+                continue
+            if '=' in name and text[j] != '{':
+                # 装備の名前に = は無い (res で確認): 引用符を閉じ忘れて、同じ行の次の装備 (compact の形) まで読んだ。
+                # この装備は読まず、開き引用符の次から読み直す (次の装備は、自分の閉じ引用符で正しく読める)
+                unread.append(m.start())
+                i = j + 1
+                continue
+        except ValueError:
+            unread.append(m.start())     # 引用符や { } が閉じていない: この行は読まず、次の行から続ける
+            nl = text.find('\n', j)
+            if nl < 0:
+                break
+            i = nl
             continue
         if not (name or "").strip():
             i = nxt          # head="" のような空の装備は、装備として扱わない
             continue
         items.append(Item(key, name, raw))
         i = nxt   # 表の中の name= や augments= は、この表の読み取りで済んでいる
-    return items
+    # = の書き忘れ (neck"…" / neck "…"): 行の頭か { , の直後に、スロット名と値だけが並ぶ形
+    for m in _NO_EQUALS.finditer(text):
+        unread.append(m.start(1))
+    unread.sort()
+    return items, unread, text
+
+
+def parse_entries(text):
+    """ファイル内の「スロット=装備」を、出てきた順に全部返す ([Item, …])。item= の行 (アイテム) は除く。
+    コメント (--) の中の装備は読まない。"""
+    return _scan(text)[0]
+
+
+def unread_lines(text):
+    """装備の行らしいのに読めなかった行を [(行番号, 行の中身), …] で返す (手で直したときの書き間違いを知らせるため)。"""
+    _items, unread, stripped = _scan(text)
+    out = []
+    for pos in unread:
+        no = stripped.count('\n', 0, pos) + 1
+        if not out or out[-1][0] != no:
+            # 行の中身は、読めなかったスロット名から行の終わりまで (1 行に全部書いたファイルでも、どの装備か分かるように)
+            end = stripped.find('\n', pos)
+            out.append((no, stripped[pos:end if end >= 0 else len(stripped)].strip()))
+    return out
 
 
 def parse_equipped_set(text):
