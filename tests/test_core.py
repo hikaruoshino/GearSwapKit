@@ -2,6 +2,8 @@
 """GearSwapKit の確認。実行 (GearSwapKit/ で): python -I tests/test_core.py"""
 import os
 import sys
+import subprocess
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -116,6 +118,61 @@ check("state.HybridMode:options('Normal', 'DT')" in lp, "戦闘中のカット�
 pw_ = _P("WAR")
 pw_.assign("sets.engaged", EP.parse_equipped_set('sets.exported={ head="頭" }'))
 check("HybridMode" not in pw_.to_lua(), "カットのセットが無ければ、HybridMode は出さない")
+
+# 回避は全ジョブ共通。割り当てたモードだけを登録し、カットの後に並べる。
+for job in C.ALL_JOBS:
+    catalog = C.sets_for_job(job)
+    paths = [s["path"] for s in catalog]
+    for base in ("sets.idle", "sets.engaged"):
+        path = base + ".Evasion"
+        entries = [s for s in catalog if s["path"] == path]
+        check(len(entries) == 1 and entries[0]["verified"] is True,
+              "%s の %s はゲーム内確認済みの共通セット" % (job, path))
+        check(paths.index(path) == paths.index(base + ".DT") + 1,
+              "%s の %s はカットの直後" % (job, path))
+
+evasion_lua = []
+for job in C.ALL_JOBS:
+    for modes in ((), ("DT",), ("Evasion",), ("DT", "Evasion")):
+        assignments = {"sets.idle": eq, "sets.engaged": eq}
+        for base in ("sets.idle", "sets.engaged"):
+            for mode in modes:
+                assignments[base + "." + mode] = eq
+        generated = G.build_lua(job, assignments)
+        for field in ("IdleMode", "HybridMode"):
+            if modes:
+                options = ", ".join("'%s'" % m for m in ("Normal",) + modes)
+                check("state.%s:options(%s)" % (field, options) in generated,
+                      "%s %s の選択肢が割り当てと一致: %s" % (job, field, modes))
+            else:
+                check("state.%s:options(" % field not in generated,
+                      "%s の未割り当て %s は登録しない" % (job, field))
+        check("Evasion" not in generated if "Evasion" not in modes else
+              'head={ name="ＢＣホーン+1"' in generated,
+              "%s の回避未割り当てと日本語装備名を保つ" % job)
+        evasion_lua.append(generated)
+
+# 一方の回避セットだけで、他方のモードを有効にしない。空の割り当ても除く。
+for base, field, other in (("sets.idle", "IdleMode", "HybridMode"),
+                           ("sets.engaged", "HybridMode", "IdleMode")):
+    generated = G.build_lua("THF", {base + ".Evasion": eq})
+    check("state.%s:options('Normal', 'Evasion')" % field in generated and
+          "state.%s:options(" % other not in generated, "回避の登録は %s のみ" % field)
+    empty = G.build_lua("THF", {base + ".Evasion": {}})
+    check("Evasion" not in empty, "空の回避セットは %s に登録しない" % field)
+    evasion_lua.append(generated)
+
+if ENV.LUAC and os.path.isfile(ENV.LUAC):
+    with tempfile.TemporaryDirectory() as syntax_dir:
+        syntax_file = os.path.join(syntax_dir, "evasion.lua")
+        for index, generated in enumerate(evasion_lua):
+            with open(syntax_file, "w", encoding="utf-8", newline="\n") as syntax_out:
+                syntax_out.write(generated)
+            result = subprocess.run([ENV.LUAC, "-p", syntax_file], capture_output=True)
+            check(result.returncode == 0, "回避の生成 Lua %d は Lua 5.1 構文に適合: %s" %
+                  (index, result.stderr.decode("utf-8", "replace")))
+else:
+    sys.stdout.buffer.write("回避の生成 Lua: Lua 5.1 がないため構文未検証\n".encode("utf-8"))
 
 # コメントアウトした装備は読まない (手で直した export)。文字列の中の -- は残す
 COMMENTED = '''sets.exported={
