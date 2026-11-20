@@ -59,6 +59,11 @@ def atomic_write(path, text, newline=None):
         raise
 
 
+# インパクトを唱えられる胴 (res/items.lua 11363 トワイライトプリス・23799 クレパスクラプリス。
+# item_descriptions に「インパクト使用可能」)。GearSwap と同じく、英語名は大文字小文字を区別しない
+IMPACT_BODIES = {"twilight cloak", "トワイライトプリス", "crepuscular cloak", "クレパスクラプリス"}
+
+
 def _key_name(path):
     """sets.x['Name'] の Name (無ければ空)。"""
     if path.endswith("']") and "['" in path:
@@ -178,7 +183,10 @@ class Project:
             rows.append(dict(path=e["path"], title=C.title(e), help=C.help_text(e),
                              verified=e.get("verified", False), custom=False, alias=e.get("alias"),
                              weapon_slot=e.get("weapon_slot"), ammo_role=e.get("ammo_role")))
+        listed = {r["path"] for r in rows}
         for path, label, _alias in self.custom:
+            if path in listed:
+                continue    # 一覧に同じセットがある (前の版で技ごとの追加に足したインパクトなど) ときは 1 行にまとめる
             title = label if not is_en() else self._custom_title_en(path)
             rows.append(dict(path=path, title=title, help=self._custom_help(path),
                              verified=False, custom=True))
@@ -313,7 +321,7 @@ class Project:
             return "notfound", None
         base = self._base_for(kind_index, en)
         path = G.make_key(base, en)
-        if any(p == path for p, _l, _a in self.custom):
+        if any(p == path for p, _l, _a in self.custom) or self._listed(path):
             return "dup", None
         alias = G.make_key(base, ja) if ja and ja != en else None
         shown = "%s (%s)" % (ja, en) if alias else en
@@ -331,12 +339,35 @@ class Project:
             return "ok"
         base = self._base_for(kind_index, en)
         path = G.make_key(base, en)
-        if any(p == path for p, _l, _a in self.custom):
+        if any(p == path for p, _l, _a in self.custom) or self._listed(path):
             return "dup"
         alias = G.make_key(base, ja) if ja and ja != en else None
         shown = "%s (%s)" % (ja, en) if alias else en
         self.custom.append((path, "%s: %s" % (label, shown), alias))
         return "ok"
+
+    def _listed(self, path):
+        """一覧 (set_catalog) に、同じパスのセットがあるか (インパクトの sets.midcast['Impact'] など)。"""
+        return any(e["path"] == path for e in C.sets_for_job(self.job))
+
+    def impact_warnings(self):
+        """インパクトのセットの注意 (「Lua を作る」で知らせる)。頭を割り当てた・胴がインパクトを唱えられるプリスでない。"""
+        out = []
+        for path in C.IMPACT_SETS:
+            items = self.assignments.get(path)
+            if not items or not self._listed(path):
+                continue
+            title = next(C.title(e) for e in C.sets_for_job(self.job) if e["path"] == path)
+            if items.get("head"):
+                out.append(L("%s: 頭に「%s」が入っています。プリスは頭の枠も使うので、頭は空けてください。",
+                             "%s: the head slot has \"%s\". The cloak covers the head slot too, so leave it empty.")
+                           % (title, items["head"].name))
+            body = items.get("body")
+            if not body or (body.name or "").lower() not in IMPACT_BODIES:
+                out.append(L("%s: 胴がトワイライトプリス (またはクレパスクラプリス) ではありません。着ていないと、インパクトを唱えられません。",
+                             "%s: the body slot isn't Twilight Cloak (or Crepuscular Cloak). Impact can't be cast without it.")
+                           % title)
+        return out
 
     def remove_custom(self, path):
         self.custom = [c for c in self.custom if c[0] != path]
