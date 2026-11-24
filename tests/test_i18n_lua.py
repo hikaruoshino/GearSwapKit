@@ -31,7 +31,7 @@ def check(cond, msg):
 
 
 H = EP.parse_equipped_set
-JOBS = ("SMN", "PLD", "PUP", "COR", "SCH", "BST", "RNG", "WHM")
+JOBS = ("SMN", "PLD", "PUP", "COR", "SCH", "BST", "RNG", "WHM", "BRD")
 
 
 # 学者の腰の自動選択を、英語クライアントの値 (天候・曜日・スキル名) で動かす模擬
